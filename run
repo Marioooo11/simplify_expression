@@ -1,0 +1,296 @@
+import re
+def process_list(lst):
+    i = 0
+    while i < len(lst):
+        if lst[i] == '&&':
+            if i > 0 and i < len(lst) - 1:
+                new_value = str(lst[i - 1]) + str(lst[i + 1])
+                lst[i - 1] = new_value
+                del lst[i:i + 2]
+                i -= 1
+        i += 1
+    return lst
+
+def handle_negation_double_parentheses(expressions):
+    pattern_complex = re.compile(r'!\(\((.*?)\)\)')
+
+    def complex_demorgan_replacement(match):
+        inner_expr = match.group(1)
+        negated_inner_expr = negate_conditions_double_parentheses(inner_expr)
+        new_expression = expressions.replace(expressions, negated_inner_expr)
+        return f'({new_expression})'
+
+    new_expression = pattern_complex.sub(complex_demorgan_replacement, expressions)
+    return new_expression
+
+
+def split_top_level_expression(expression):
+    result = []
+    combined_expr = []
+
+    pattern_complex = re.compile(r'\(\((.*?)\)\)')
+
+    pos = 0
+
+    while pos < len(expression):
+        match = pattern_complex.search(expression, pos)
+
+        if match:
+            start, end = match.span()
+            if start > pos:
+                outer_expr = expression[pos:start].strip()
+                if '&&' in outer_expr:
+                    combined_expr.append(outer_expr)
+
+            inner_content = match.group(1).strip()
+            combined_expr.append(f'(({inner_content}))')
+
+            pos = end
+
+        else:
+            remaining_expr = expression[pos:].strip()
+            if '||' in remaining_expr:
+                result.append(remaining_expr)
+            elif '&&' in remaining_expr:
+                if combined_expr:
+                    combined_expr[-1] = f'{combined_expr[-1]} && {remaining_expr}'
+                else:
+                    combined_expr.append(remaining_expr)
+            break
+
+    result.extend(combined_expr)
+    new_result = process_list(result)
+    return new_result
+
+
+
+def reduce_double_parentheses(expressions):
+    expressions = handle_negation_double_parentheses(expressions)
+    expressions = split_top_level_expression(expressions)
+    return expressions
+
+def process_expression_double_parentheses(expressions):
+    for expr in expressions:
+        results = reduce_double_parentheses(expr)
+    return results
+
+def negate_conditions_double_parentheses(expression):
+    comparison_map = {
+        '>=': '<',
+        '<=': '>',
+        '>': '<=',
+        '<': '>=',
+        '==': '!=',
+        '!=': '=='
+    }
+    pattern = '|'.join(re.escape(op) for op in comparison_map.keys())
+    expression = re.sub(pattern, lambda match: comparison_map[match.group(0)], expression)
+    expression = expression.replace('&&', 'TEMPAND').replace('||', '&&').replace('TEMPAND', '||')
+    expression = expression + ")"
+    return expression
+
+
+def negate_conditions(expression):
+    comparison_map = {
+        '>=': '<',
+        '<=': '>',
+        '>': '<=',
+        '<': '>=',
+        '==': '!=',
+        '!=': '=='
+    }
+    pattern = '|'.join(re.escape(op) for op in comparison_map.keys())
+    expression = re.sub(pattern, lambda match: comparison_map[match.group(0)], expression)
+    return expression
+
+def split_expression(expressions):
+    result = []
+    pattern_or = re.compile(r'\s*\|\|\s*(?![^(]*\))')
+
+    for expression in expressions:
+        if '((' in expression:
+            # 拆分表达式 - 只接受((...)&&(...))情况
+            or_parts = pattern_or.split(expression)
+            sub_results = []
+            sub_results.append([p.strip() for p in or_parts])
+            for sub_result in sub_results:
+                for sub in sub_result:
+                    if "!(" in sub:
+                        sub = sub.replace("))",")")
+                        sub = handle_negation(sub)
+                    sub = sub.replace("((","(")
+                    sub = sub.replace("))","")
+                    sub = sub.replace(")&&(","&&")
+                    sub = sub.replace(")&("," & ")
+                    result.append(sub)
+        else:
+            result.append([expression.strip()])
+    return result
+
+
+def find_deepest_parentheses(expression):
+    max_depth = 1
+    current_depth = 0
+    start_index = -1
+    deepest_expressions = []
+
+    for i, char in enumerate(expression):
+        if char == '(':
+            current_depth += 1
+            if current_depth == 1:
+                start_index = i
+        elif char == ')':
+            if current_depth > 1:
+                if current_depth > max_depth:
+                    max_depth = current_depth
+                    deepest_expressions = [expression[start_index:i + 1]]
+                elif current_depth == max_depth:
+                    deepest_expressions.append(expression[start_index:i + 1])
+            current_depth -= 1
+    return deepest_expressions, max_depth
+
+def handle_negation(expression):
+    not_pattern = re.compile(r'!\((?!.*index)(.*?)\)')
+
+    def demorgan_replacement(match):
+        inner_expr = match.group(1)
+        transformed_expr = re.sub(r'&&', 'TEMPAND', inner_expr)
+        transformed_expr = re.sub(r'\|\|', '&&', transformed_expr)
+        transformed_expr = re.sub(r'TEMPAND', '||', transformed_expr)
+        negated_expr = negate_conditions(transformed_expr)
+        return f'{negated_expr}'
+
+    return not_pattern.sub(demorgan_replacement, expression)
+
+# 解析 || 逻辑运算符
+def split_or_conditions(expression):
+    if "&&" not in expression:
+        parts = re.split(r'\|\|', expression)
+        parts = [part.strip().strip('()') for part in parts]
+    else:
+    # 确保不在括号内拆分
+    # (?![^(]*\))负向前瞻的断言 - 任意数量的非左括号字符后面跟着一个右括号，确保在分割的时候不会在有未匹配的左括号的情况下因为遇到||就进行分割
+        parts = re.split(r'\|\|(?![^(]*\))', expression)
+        parts = [part.strip().strip('()') for part in parts]
+    return parts
+
+
+# 解析表达式并处理 || 和 !，输出多个 && 的组合
+def process_expression(expression):
+    expression = handle_negation(expression)
+    # 拆分 && 条件
+    and_parts = re.split(r'\s*&&\s*(?![^(]*\))', expression)  # 确保不在括号内拆分
+    and_parts = [part.strip() for part in and_parts]
+    result = []
+    for part in and_parts:
+        if "||" in part:
+            or_parts = split_or_conditions(part)
+            if result:
+                new_result = []
+                for res in result:
+                    for or_part in or_parts:
+                        new_result.append(f"{res} && {or_part}")
+                result = new_result
+            else:
+                result.extend(or_parts)
+        else:
+            if result:
+                result = [f"{res} && {part}" for res in result]
+            else:
+                result.append(part)
+    return result
+
+
+def process_ordinary_expressions(expressions):
+    processed_exprs = []
+    for expr in [expressions]:
+        # 处理括号优先级并找到最深的括号
+        deepest_result = find_deepest_parentheses(expr)
+        if deepest_result[1] <= 1:
+            return expressions
+        for exp in deepest_result[0]:
+            # 解析表达式并处理 || 和 !，输出多个 && 的组合
+            result = process_expression(exp)
+            for r in result:
+                # 将已浅化的表达式替换回去
+                new_expr = expr.replace(exp, r)
+                processed_exprs.append(new_expr)
+                expressions = [new_expr]
+    return processed_exprs
+
+
+def index_logic(expression):
+    expression = expression.lower()
+
+    # 匹配数组部分
+    match1 = re.search(r'!\[(.*?)\].indexof\((.*?)\)==-1', expression)
+    match2 = re.search(r'\[(.*?)\].indexof\((.*?)\)>-1', expression)
+
+    if match1:
+        items = match1.group(1).split(',')
+        variable = match1.group(2)
+        conditions = [f"{item.strip()}.indexOf({variable}) == -1" for item in items]
+        unmatched_part = expression[:match1.start()] + expression[match1.end():]
+        return conditions, unmatched_part
+
+    elif match2:
+        items = match2.group(1).split(',')
+        variable = match2.group(2)
+        conditions = [f"{item.strip()}.indexOf({variable}) > -1" for item in items]
+        results = " && ".join(conditions)
+        unmatched_part = expression[:match2.start()] + expression[match2.end():]
+        results = results + unmatched_part
+        print(f"ff:{unmatched_part}")
+        return [results]
+
+    else:
+        return expression, expression
+
+
+def run_simplify_expression(exprs):
+    processed_expressions = []
+    re_exprs = [s.replace(" ", "") for s in exprs]
+
+    for expr in re_exprs:
+        if "!((" in expr:
+            print(f"有否定双括号{re_exprs}")
+            re_exprs = process_expression_double_parentheses(re_exprs)
+            return run_simplify_expression(re_exprs)
+        elif "((" in expr:
+            print("有双括号")
+            re_exprs = split_expression(re_exprs)
+            return run_simplify_expression(re_exprs)
+        else:
+            deepth = find_deepest_parentheses(expr)
+            if 1 == deepth[1]:
+                re_exprs = process_expression(expr)
+                for e in re_exprs:
+                    processed_expressions.append(e)
+            else:
+                re_exprs = process_ordinary_expressions(expr)
+                for re_expr in re_exprs:
+                    re_exprs = process_expression(re_expr)
+                    for e in re_exprs:
+                        # print(f"用例:{e}")
+                        processed_expressions.append(e)
+    for pro_expr in processed_expressions:
+        if "].index" in pro_expr:
+            pro_exprss = index_logic(pro_expr)
+            for pro_exprs in pro_exprss:
+                processed_expressions.append(pro_exprs)
+                processed_expressions = [item for item in processed_expressions if '].' not in item]
+    return processed_expressions
+
+
+
+
+exprs = [
+    "(A!='3'||B!='Y'||C<6||D%1!=0)&&(E!='5'||F!='Y'||G<4||H%1!=0)&&(I!='10'||J!='Y'||K<2||L%1!=0))"
+]
+
+for e in exprs:
+    print(f"原式子：{e}")
+
+simplify_expressions = run_simplify_expression(exprs)
+for item in simplify_expressions:
+    print(f"所有正例：{item}")
